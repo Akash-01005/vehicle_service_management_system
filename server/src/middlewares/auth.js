@@ -3,15 +3,17 @@ import validateToken from '../libs/tokenValidator.js';
 
 const authMiddleware = async (req,res,next) =>{
      try{
-        const token = req.cookies.token;
+      const token = req.cookies.accessToken;
         const secretKey = process.env.SECRET_KEY;
         if(!validateToken(token,secretKey)){
-            const error = new Error('Unauthorized!! No token provided');
+         const error = new Error('Unauthorized!! No access token provided');
             error.statusCode = 401;
             return next(error);
         }
         const decodedToken = decode(token);
         req.userID = decodedToken.userId;
+        req.userRole = decodedToken.role;
+        req.garageID = decodedToken.garageId;
         next();
      }catch(error){
         console.error('Error in auth middleware:', error);

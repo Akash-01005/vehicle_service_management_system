@@ -7,8 +7,11 @@ import validateToken from "../libs/tokenValidator.js";
 
 const saltRounds = Number.parseInt(process.env.SALT_ROUNDS, 10) || 10;
 const secretKey = process.env.SECRET_KEY;
-const tokenExpiry = process.env.TOKEN_EXPIRATION_TIME || "1h";
+const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRATION_TIME || "15m";
+const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRATION_TIME || process.env.TOKEN_EXPIRATION_TIME || "7d";
 const resetTokenExpiry = process.env.RESET_PASSWORD_TOKEN_EXPIRATION_TIME || "5m";
+const accessCookieMaxAge = 15 * 60 * 1000;
+const refreshCookieMaxAge = 7 * 24 * 60 * 60 * 1000;
 
 const serializeUser = (user) => {
     const plainUser = user.toObject ? user.toObject() : user;
@@ -21,6 +24,28 @@ const buildAuthCookieOptions = () => ({
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
 });
+
+const createTokenPair = (payload) => ({
+    accessToken: tokenGenerator(payload, secretKey, accessTokenExpiry),
+    refreshToken: tokenGenerator(payload, secretKey, refreshTokenExpiry),
+});
+
+const setAuthCookies = (res, accessToken, refreshToken) => {
+    res.cookie("accessToken", accessToken, {
+        ...buildAuthCookieOptions(),
+        maxAge: accessCookieMaxAge,
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+        ...buildAuthCookieOptions(),
+        maxAge: refreshCookieMaxAge,
+    });
+};
+
+const clearAuthCookies = (res) => {
+    res.clearCookie("accessToken", buildAuthCookieOptions());
+    res.clearCookie("refreshToken", buildAuthCookieOptions());
+};
 
 export const createUser = async (req, res, next) => {
     try {
@@ -73,20 +98,17 @@ export const login = async (req, res, next) => {
             throw error;
         }
 
-        const token = tokenGenerator(
-            { userId: user._id, garageId: user.garageId, role: user.role },
-            secretKey,
-            tokenExpiry
-        );
+        const tokenPair = createTokenPair({
+            userId: user._id,
+            garageId: user.garageId,
+            role: user.role,
+        });
 
         user.lastLogin = new Date();
-        user.refreshToken = token;
+        user.refreshToken = tokenPair.refreshToken;
         await user.save();
 
-        res.cookie("token", token, {
-            ...buildAuthCookieOptions(),
-            maxAge: 1000 * 60 * 60,
-        });
+        setAuthCookies(res, tokenPair.accessToken, tokenPair.refreshToken);
 
         return res.status(200).json({
             message: "Login successful...",
@@ -98,14 +120,76 @@ export const login = async (req, res, next) => {
     }
 };
 
-export const logout = async (req, res, next) => {
+export const refreshAccessToken = async (req, res, next) => {
     try {
-        const { userID } = req;
-        if (userID) {
-            await userModel.findByIdAndUpdate(userID, { refreshToken: null });
+        const incomingRefreshToken = req.cookies.refreshToken;
+
+        if (!incomingRefreshToken) {
+            const error = new Error("Unauthorized!! No refresh token provided");
+            error.statusCode = 401;
+            throw error;
         }
 
-        res.clearCookie("token", buildAuthCookieOptions());
+        const decodedToken = validateToken(incomingRefreshToken, secretKey);
+        if (!decodedToken) {
+            const error = new Error("Unauthorized!! Invalid refresh token");
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const user = await userModel.findById(decodedToken.userId).select("+refreshToken");
+        if (!user || user.refreshToken !== incomingRefreshToken) {
+            const error = new Error("Unauthorized!! Refresh token mismatch");
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const tokenPair = createTokenPair({
+            userId: user._id,
+            garageId: user.garageId,
+            role: user.role,
+        });
+
+        user.refreshToken = tokenPair.refreshToken;
+        await user.save();
+
+        setAuthCookies(res, tokenPair.accessToken, tokenPair.refreshToken);
+
+        return res.status(200).json({
+            message: "Token refreshed successfully...",
+        });
+    } catch (error) {
+        console.error("Error refreshing access token:", error);
+        next(error);
+    }
+};
+
+export const logout = async (req, res, next) => {
+    try {
+        const accessToken = req.cookies.accessToken;
+        const refreshToken = req.cookies.refreshToken;
+
+        let userId = null;
+
+        if (accessToken) {
+            const decodedAccessToken = validateToken(accessToken, secretKey);
+            if (decodedAccessToken?.userId) {
+                userId = decodedAccessToken.userId;
+            }
+        }
+
+        if (!userId && refreshToken) {
+            const decodedRefreshToken = validateToken(refreshToken, secretKey);
+            if (decodedRefreshToken?.userId) {
+                userId = decodedRefreshToken.userId;
+            }
+        }
+
+        if (userId) {
+            await userModel.findByIdAndUpdate(userId, { refreshToken: null });
+        }
+
+        clearAuthCookies(res);
         return res.status(200).json({
             message: "Logout successful...",
         });
