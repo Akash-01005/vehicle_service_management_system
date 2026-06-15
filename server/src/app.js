@@ -7,6 +7,7 @@ import customerRouter from './routes/customer.routes.js';
 import vehicleRouter from './routes/vehicle.routes.js';
 import serviceRecordRouter from './routes/serviceRecord.routes.js';
 import jobCardRouter from './routes/jobCard.routes.js';
+import invoiceRouter from './routes/invoice.routes.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 
 const app = express();
@@ -20,6 +21,7 @@ app.use('/api/customers', customerRouter);
 app.use('/api/vehicles', vehicleRouter);
 app.use('/api/service-records', serviceRecordRouter);
 app.use('/api/job-cards', jobCardRouter);
+app.use('/api/invoices', invoiceRouter);
 
 
 app.use(errorHandler);
