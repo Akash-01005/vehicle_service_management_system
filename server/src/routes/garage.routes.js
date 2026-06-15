@@ -11,7 +11,7 @@ import {
 
 const garageRouter = Router();
 
-garageRouter.post("/", createGarage);
+garageRouter.post("/create-garage", createGarage);
 garageRouter.get("/", authMiddleware, listGarages);
 garageRouter.get("/me", authMiddleware, getGarageProfile);
 garageRouter.patch("/me", authMiddleware, updateGarage);

@@ -21,11 +21,10 @@ userRouter.post("/refresh-token", refreshAccessToken);
 userRouter.post("/reset-password-link", forgotPasswordLink);
 userRouter.post("/reset-password/:token", forgotPassword);
 
-userRouter.delete("/logout", logout);
+userRouter.delete("/logout", authMiddleware, logout);
 
-userRouter.use(authMiddleware);
-userRouter.get("/profile", getUserProfile);
-userRouter.patch("/update", updateUser);
-userRouter.delete("/delete", deleteUser);
+userRouter.get("/profile", authMiddleware, getUserProfile);
+userRouter.patch("/update", authMiddleware, updateUser);
+userRouter.delete("/delete", authMiddleware, deleteUser);
 
 export default userRouter;
