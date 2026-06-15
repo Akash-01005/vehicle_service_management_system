@@ -3,23 +3,24 @@ import mongoose from "mongoose";
 const allowedPaymentStatuses = ["pending", "paid", "partially_paid"];
 const allowedPaymentMethods = ["cash", "card", "upi", "bank_transfer"];
 
-export default function validateInvoice(req, res, next) {
+const validateInvoicePayload = (body, options = {}) => {
     const errors = [];
-    const { garageId, customerId, vehicleId, jobCardId, invoiceNumber, labourCharge, partsCharge, taxAmount, discountAmount, totalAmount, paymentStatus, paymentMethod } = req.body || {};
+    const { requireFields = true } = options;
+    const { garageId, customerId, vehicleId, jobCardId, invoiceNumber, labourCharge, partsCharge, taxAmount, discountAmount, totalAmount, paymentStatus, paymentMethod } = body || {};
 
     if (garageId !== undefined && garageId !== null && (typeof garageId !== "string" || !mongoose.Types.ObjectId.isValid(garageId))) {
         errors.push("garageId must be a valid ObjectId if provided");
     }
 
-    if (!customerId || typeof customerId !== "string" || !mongoose.Types.ObjectId.isValid(customerId)) {
+    if ((requireFields || customerId !== undefined) && (!customerId || typeof customerId !== "string" || !mongoose.Types.ObjectId.isValid(customerId))) {
         errors.push("customerId is required and must be a valid ObjectId");
     }
 
-    if (!vehicleId || typeof vehicleId !== "string" || !mongoose.Types.ObjectId.isValid(vehicleId)) {
+    if ((requireFields || vehicleId !== undefined) && (!vehicleId || typeof vehicleId !== "string" || !mongoose.Types.ObjectId.isValid(vehicleId))) {
         errors.push("vehicleId is required and must be a valid ObjectId");
     }
 
-    if (!jobCardId || typeof jobCardId !== "string" || !mongoose.Types.ObjectId.isValid(jobCardId)) {
+    if ((requireFields || jobCardId !== undefined) && (!jobCardId || typeof jobCardId !== "string" || !mongoose.Types.ObjectId.isValid(jobCardId))) {
         errors.push("jobCardId is required and must be a valid ObjectId");
     }
 
@@ -43,7 +44,7 @@ export default function validateInvoice(req, res, next) {
         errors.push("discountAmount must be a number if provided");
     }
 
-    if (totalAmount === undefined || totalAmount === null || Number.isNaN(Number(totalAmount))) {
+    if ((requireFields || totalAmount !== undefined) && (totalAmount === undefined || totalAmount === null || Number.isNaN(Number(totalAmount)))) {
         errors.push("totalAmount is required and must be a number");
     }
 
@@ -55,13 +56,33 @@ export default function validateInvoice(req, res, next) {
         errors.push(`paymentMethod must be one of: ${allowedPaymentMethods.join(", ")}`);
     }
 
+    return errors;
+};
+
+const sendValidationErrors = (res, errors) => {
+    return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        details: errors,
+    });
+};
+
+export default function validateInvoice(req, res, next) {
+    const errors = validateInvoicePayload(req.body, { requireFields: true });
+
     if (errors.length) {
-        return res.status(400).json({
-            success: false,
-            message: "Validation failed",
-            details: errors,
-        });
+        return sendValidationErrors(res, errors);
     }
 
     next();
 }
+
+export const validateInvoiceUpdate = (req, res, next) => {
+    const errors = validateInvoicePayload(req.body, { requireFields: false });
+
+    if (errors.length) {
+        return sendValidationErrors(res, errors);
+    }
+
+    next();
+};

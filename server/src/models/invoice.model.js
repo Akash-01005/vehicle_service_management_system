@@ -68,6 +68,21 @@ const invoiceSchema = new mongoose.Schema(
       type: String,
       enum: ["cash", "card", "upi", "bank_transfer"],
     },
+
+    pdfKey: {
+      type: String,
+      default: null,
+    },
+
+    pdfUrl: {
+      type: String,
+      default: null,
+    },
+
+    pdfUploadedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

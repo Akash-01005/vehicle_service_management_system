@@ -4,6 +4,14 @@ import customerModel from "../models/customer.model.js";
 import vehicleModel from "../models/vechicle.model.js";
 import jobCardModel from "../models/jobCard.model.js";
 import serviceRecordModel from "../models/serviceRecord.model.js";
+import garageModel from "../models/garage.model.js";
+import { createInvoicePdfBuffer } from "../libs/invoicePdf.js";
+import {
+    buildInvoicePdfKey,
+    deleteInvoicePdfFromS3,
+    getInvoicePdfStreamFromS3,
+    uploadInvoicePdfToS3,
+} from "../libs/invoiceStorage.js";
 
 const serializeInvoice = (invoice) => {
     const plainInvoice = invoice.toObject ? invoice.toObject() : invoice;
@@ -108,6 +116,56 @@ const validateInvoiceDependencies = async (currentUser, garageId, customerId, ve
     return { customer, vehicle, jobCard, serviceRecord };
 };
 
+const loadInvoicePdfContext = async (invoice) => {
+    const [customer, vehicle, jobCard, serviceRecord, garage] = await Promise.all([
+        customerModel.findById(invoice.customerId),
+        vehicleModel.findById(invoice.vehicleId),
+        jobCardModel.findById(invoice.jobCardId),
+        serviceRecordModel.findOne({ jobCardId: invoice.jobCardId }),
+        garageModel.findById(invoice.garageId),
+    ]);
+
+    if (!customer || !vehicle || !jobCard || !serviceRecord || !garage) {
+        const error = new Error("Unable to process invoice pdf because related data is missing");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    return { customer, vehicle, jobCard, serviceRecord, garage };
+};
+
+const uploadInvoicePdf = async (invoice) => {
+    const context = await loadInvoicePdfContext(invoice);
+    const pdfBuffer = await createInvoicePdfBuffer({
+        invoice,
+        ...context,
+    });
+    const pdfKey = buildInvoicePdfKey(invoice.garageId, invoice.invoiceNumber);
+
+    return uploadInvoicePdfToS3({ key: pdfKey, buffer: pdfBuffer });
+};
+
+const isInvoicePdfDataChanged = (updateData) => {
+    const pdfFields = ["garageId", "customerId", "vehicleId", "jobCardId", "invoiceNumber", "labourCharge", "partsCharge", "taxAmount", "discountAmount", "totalAmount", "paymentStatus", "paymentMethod"];
+    return pdfFields.some((field) => Object.prototype.hasOwnProperty.call(updateData, field));
+};
+
+const writeInvoicePdfResponse = async (res, invoice, pdfKey) => {
+    const pdfResponse = await getInvoicePdfStreamFromS3(pdfKey);
+
+    if (!pdfResponse.Body) {
+        const error = new Error("Invoice pdf file is empty");
+        error.statusCode = 500;
+        throw error;
+    }
+
+    const fileName = `invoice-${invoice.invoiceNumber}.pdf`.replace(/[^a-zA-Z0-9._-]/g, "-");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    pdfResponse.Body.pipe(res);
+};
+
 const normalizeInvoiceUpdate = (invoice, body) => {
     const updateData = {};
     const { garageId, customerId, vehicleId, jobCardId, invoiceNumber, labourCharge, partsCharge, taxAmount, discountAmount, totalAmount, paymentStatus, paymentMethod } = body;
@@ -162,20 +220,39 @@ export const createInvoice = async (req, res, next) => {
             throw error;
         }
 
-        const invoice = await invoiceModel.create({
+        const invoiceData = {
             garageId: effectiveGarageId,
             customerId,
             vehicleId,
             jobCardId,
             invoiceNumber: finalInvoiceNumber,
-            labourCharge,
-            partsCharge,
-            taxAmount,
-            discountAmount,
+            labourCharge: labourCharge ?? 0,
+            partsCharge: partsCharge ?? 0,
+            taxAmount: taxAmount ?? 0,
+            discountAmount: discountAmount ?? 0,
             totalAmount,
-            paymentStatus,
+            paymentStatus: paymentStatus || "pending",
             paymentMethod,
+        };
+
+        const pdfAsset = await uploadInvoicePdf({
+            ...invoiceData,
+            createdAt: new Date(),
         });
+
+        let invoice;
+
+        try {
+            invoice = await invoiceModel.create({
+                ...invoiceData,
+                pdfKey: pdfAsset.key,
+                pdfUrl: pdfAsset.url,
+                pdfUploadedAt: new Date(),
+            });
+        } catch (createError) {
+            await deleteInvoicePdfFromS3(pdfAsset.key);
+            throw createError;
+        }
 
         return res.status(201).json({
             message: "Invoice created successfully...",
@@ -281,10 +358,51 @@ export const updateInvoice = async (req, res, next) => {
             }
         }
 
-        const updatedInvoice = await invoiceModel.findByIdAndUpdate(invoice._id, updateData, {
-            new: true,
-            runValidators: true,
-        });
+        if (updateData.jobCardId) {
+            const duplicateJobCardInvoice = await invoiceModel.findOne({
+                jobCardId: updateData.jobCardId,
+                _id: { $ne: invoice._id },
+            });
+
+            if (duplicateJobCardInvoice) {
+                const error = new Error("Invoice already exists for this job card!!");
+                error.statusCode = 409;
+                throw error;
+            }
+        }
+
+        let pdfAsset = null;
+        const oldPdfKey = invoice.pdfKey;
+        const shouldRefreshPdf = isInvoicePdfDataChanged(updateData);
+
+        if (shouldRefreshPdf) {
+            pdfAsset = await uploadInvoicePdf({
+                ...invoice.toObject(),
+                ...updateData,
+            });
+
+            updateData.pdfKey = pdfAsset.key;
+            updateData.pdfUrl = pdfAsset.url;
+            updateData.pdfUploadedAt = new Date();
+        }
+
+        let updatedInvoice;
+
+        try {
+            updatedInvoice = await invoiceModel.findByIdAndUpdate(invoice._id, updateData, {
+                new: true,
+                runValidators: true,
+            });
+        } catch (updateError) {
+            if (pdfAsset) {
+                await deleteInvoicePdfFromS3(pdfAsset.key);
+            }
+            throw updateError;
+        }
+
+        if (pdfAsset && oldPdfKey && oldPdfKey !== pdfAsset.key) {
+            await deleteInvoicePdfFromS3(oldPdfKey);
+        }
 
         return res.status(200).json({
             message: "Invoice updated successfully...",
@@ -314,11 +432,56 @@ export const deleteInvoice = async (req, res, next) => {
             throw error;
         }
 
+        if (invoice.pdfKey) {
+            await deleteInvoicePdfFromS3(invoice.pdfKey);
+        }
+
         return res.status(200).json({
             message: "Invoice deleted successfully...",
         });
     } catch (error) {
         console.error("Error deleting invoice:", error);
+        next(error);
+    }
+};
+
+export const downloadInvoicePdf = async (req, res, next) => {
+    try {
+        const currentUser = await getCurrentUser(req.userID);
+
+        if (!currentUser || !canManageInvoices(currentUser.role)) {
+            const error = new Error("Forbidden!! You do not have access to download invoice pdf");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const invoice = await getInvoiceScope(currentUser, req.params.invoiceId);
+
+        if (invoice.pdfKey) {
+            try {
+                await writeInvoicePdfResponse(res, invoice, invoice.pdfKey);
+                return;
+            } catch (pdfError) {
+                const statusCode = pdfError.$metadata?.httpStatusCode;
+                if (statusCode !== 404 && pdfError.name !== "NoSuchKey" && pdfError.Code !== "NoSuchKey") {
+                    throw pdfError;
+                }
+            }
+        }
+
+        const pdfAsset = await uploadInvoicePdf(invoice);
+
+        const updatedInvoice = await invoiceModel.findByIdAndUpdate(invoice._id, {
+            pdfKey: pdfAsset.key,
+            pdfUrl: pdfAsset.url,
+            pdfUploadedAt: new Date(),
+        }, {
+            new: true,
+        });
+
+        await writeInvoicePdfResponse(res, updatedInvoice, pdfAsset.key);
+    } catch (error) {
+        console.error("Error generating invoice pdf:", error);
         next(error);
     }
 };
