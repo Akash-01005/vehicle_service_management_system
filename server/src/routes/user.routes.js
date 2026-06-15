@@ -20,9 +20,7 @@ userRouter.post("/login", login);
 userRouter.post("/refresh-token", refreshAccessToken);
 userRouter.post("/reset-password-link", forgotPasswordLink);
 userRouter.post("/reset-password/:token", forgotPassword);
-
 userRouter.delete("/logout", authMiddleware, logout);
-
 userRouter.get("/profile", authMiddleware, getUserProfile);
 userRouter.patch("/update", authMiddleware, updateUser);
 userRouter.delete("/delete", authMiddleware, deleteUser);

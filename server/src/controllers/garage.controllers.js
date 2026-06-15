@@ -11,10 +11,16 @@ const getCurrentUser = async (userID) => {
     return userModel.findById(userID).select("role garageId isActive");
 };
 
-const isGarageManager = (role) => role === "owner" || role === "admin";
+const isGarageAdmin = (role) => role === "admin";
 
 export const createGarage = async (req, res, next) => {
     try {
+        if (req.userRole !== "admin") {
+            const error = new Error("Forbidden!! Only admin can create garage data");
+            error.statusCode = 403;
+            throw error;
+        }
+
         const { name, email, phone, address, gstNumber, logo } = req.body;
 
         const existingGarage = await garageModel.findOne({ email });
@@ -45,6 +51,12 @@ export const createGarage = async (req, res, next) => {
 
 export const getGarageProfile = async (req, res, next) => {
     try {
+        if (req.userRole !== "admin") {
+            const error = new Error("Forbidden!! Only admin can view garage data");
+            error.statusCode = 403;
+            throw error;
+        }
+
         const garageID = req.garageID || req.params.garageId;
         const garage = await garageModel.findById(garageID);
 
@@ -68,7 +80,7 @@ export const listGarages = async (req, res, next) => {
     try {
         const currentUser = await getCurrentUser(req.userID);
 
-        if (!currentUser || !isGarageManager(currentUser.role)) {
+        if (!currentUser || !isGarageAdmin(currentUser.role)) {
             const error = new Error("Forbidden!! You do not have access to garage list");
             error.statusCode = 403;
             throw error;
@@ -90,14 +102,8 @@ export const updateGarage = async (req, res, next) => {
     try {
         const currentUser = await getCurrentUser(req.userID);
 
-        if (!currentUser || !isGarageManager(currentUser.role)) {
+        if (!currentUser || !isGarageAdmin(currentUser.role)) {
             const error = new Error("Forbidden!! You do not have access to update garage");
-            error.statusCode = 403;
-            throw error;
-        }
-
-        if (currentUser.garageId?.toString() !== req.garageID?.toString() && currentUser.role !== "owner") {
-            const error = new Error("Forbidden!! You can only update your own garage");
             error.statusCode = 403;
             throw error;
         }
@@ -147,14 +153,8 @@ export const deactivateGarage = async (req, res, next) => {
     try {
         const currentUser = await getCurrentUser(req.userID);
 
-        if (!currentUser || !isGarageManager(currentUser.role)) {
+        if (!currentUser || !isGarageAdmin(currentUser.role)) {
             const error = new Error("Forbidden!! You do not have access to deactivate garage");
-            error.statusCode = 403;
-            throw error;
-        }
-
-        if (currentUser.garageId?.toString() !== req.garageID?.toString() && currentUser.role !== "owner") {
-            const error = new Error("Forbidden!! You can only deactivate your own garage");
             error.statusCode = 403;
             throw error;
         }
@@ -185,14 +185,8 @@ export const deleteGarage = async (req, res, next) => {
     try {
         const currentUser = await getCurrentUser(req.userID);
 
-        if (!currentUser || currentUser.role !== "owner") {
-            const error = new Error("Forbidden!! Only owner can delete garage");
-            error.statusCode = 403;
-            throw error;
-        }
-
-        if (currentUser.garageId?.toString() !== req.garageID?.toString()) {
-            const error = new Error("Forbidden!! You can only delete your own garage");
+        if (!currentUser || !isGarageAdmin(currentUser.role)) {
+            const error = new Error("Forbidden!! Only admin can delete garage");
             error.statusCode = 403;
             throw error;
         }

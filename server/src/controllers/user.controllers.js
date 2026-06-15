@@ -7,10 +7,10 @@ import validateToken from "../libs/tokenValidator.js";
 
 const saltRounds = Number.parseInt(process.env.SALT_ROUNDS, 10) || 10;
 const secretKey = process.env.SECRET_KEY;
-const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRATION_TIME || "15m";
+const accessTokenExpiry = process.env.ACCESS_TOKEN_EXPIRATION_TIME || process.env.TOKEN_EXPIRATION_TIME || "1d";
 const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRATION_TIME || process.env.TOKEN_EXPIRATION_TIME || "7d";
 const resetTokenExpiry = process.env.RESET_PASSWORD_TOKEN_EXPIRATION_TIME || "5m";
-const accessCookieMaxAge = 15 * 60 * 1000;
+const accessCookieMaxAge = 24 * 60 * 60 * 1000;
 const refreshCookieMaxAge = 7 * 24 * 60 * 60 * 1000;
 
 const serializeUser = (user) => {
